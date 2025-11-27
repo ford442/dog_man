@@ -9,7 +9,11 @@
     "dev": "webpack --mode development --watch",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["rpg", "game", "canvas"],
+  "keywords": [
+    "rpg",
+    "game",
+    "canvas"
+  ],
   "author": "",
   "license": "ISC",
   "devDependencies": {

@@ -5,13 +5,24 @@
 import './styles.css';
 
 // Game constants
-const TILE_SIZE = 32;
+const TILE_SIZE = 32; // Logic size
+const ISO_TILE_WIDTH = 64; // Visual width
+const ISO_TILE_HEIGHT = 32; // Visual height
+const BLOCK_HEIGHT = 40; // Height of 3D blocks
+
 const MAP_WIDTH = 25;
 const MAP_HEIGHT = 18;
 const COLLISION_PADDING = 4;
 
 let canvas;
 let ctx;
+
+// Camera state
+const camera = {
+    x: 0,
+    y: 0,
+    rotation: 0 // 0, 90, 180, 270
+};
 
 // Player state
 const player = {
@@ -20,7 +31,34 @@ const player = {
     width: TILE_SIZE,
     height: TILE_SIZE,
     speed: 3,
+    direction: 'down',
+    isLocked: false
+};
+
+// NPCs
+const ptCat = {
+    x: 2 * TILE_SIZE,
+    y: 16 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE,
+    direction: 'down',
+    triggered: false
+};
+
+const sarah = {
+    x: 4 * TILE_SIZE,
+    y: 15 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE,
     direction: 'down'
+};
+
+const zazu = {
+    x: 5 * TILE_SIZE,
+    y: 15 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE,
+    direction: 'left'
 };
 
 // Input handling
@@ -28,11 +66,13 @@ const keys = {
     up: false,
     down: false,
     left: false,
-    right: false
+    right: false,
+    q: false,
+    e: false
 };
 
 // City map layout
-// 0 = grass/ground, 1 = road, 2 = building, 3 = hospital, 4 = tree, 5 = sidewalk
+// 0 = grass/ground, 1 = road, 2 = building, 3 = hospital, 4 = tree, 5 = sidewalk, 6 = lab
 const cityMap = [
     [4, 4, 4, 4, 4, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 4, 4, 4, 4, 4],
     [4, 0, 0, 0, 4, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 4, 0, 0, 0, 4],
@@ -50,8 +90,8 @@ const cityMap = [
     [4, 0, 0, 0, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 0, 0, 0, 4],
     [4, 0, 0, 0, 5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5, 0, 0, 0, 4],
     [2, 2, 5, 5, 5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5, 5, 5, 2, 2],
-    [2, 2, 5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5, 2, 2],
-    [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+    [6, 6, 5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5, 6, 6],
+    [6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]
 ];
 
 // Tile colors
@@ -61,7 +101,19 @@ const tileColors = {
     2: '#8b7355', // building
     3: '#ffffff', // hospital (white)
     4: '#2d5a27', // tree
-    5: '#b8b8b8'  // sidewalk
+    5: '#b8b8b8', // sidewalk
+    6: '#4a3b5a'  // lab (dark purple)
+};
+
+// Tile Heights (Z)
+const tileHeights = {
+    0: 0,
+    1: 0,
+    2: BLOCK_HEIGHT,
+    3: BLOCK_HEIGHT,
+    4: 10,
+    5: 0,
+    6: BLOCK_HEIGHT
 };
 
 // Event listeners for keyboard input
@@ -82,6 +134,14 @@ document.addEventListener('keydown', (e) => {
         case 'd':
         case 'arrowright':
             keys.right = true;
+            break;
+        case 'q':
+            if (!keys.q) rotateCamera('left');
+            keys.q = true;
+            break;
+        case 'e':
+            if (!keys.e) rotateCamera('right');
+            keys.e = true;
             break;
     }
 });
@@ -104,8 +164,22 @@ document.addEventListener('keyup', (e) => {
         case 'arrowright':
             keys.right = false;
             break;
+        case 'q':
+            keys.q = false;
+            break;
+        case 'e':
+            keys.e = false;
+            break;
     }
 });
+
+function rotateCamera(direction) {
+    if (direction === 'left') {
+        camera.rotation = (camera.rotation + 90) % 360;
+    } else {
+        camera.rotation = (camera.rotation - 90 + 360) % 360;
+    }
+}
 
 // Check if a position is walkable
 function isWalkable(x, y) {
@@ -129,168 +203,474 @@ function canMove(newX, newY) {
            isWalkable(newX + player.width - COLLISION_PADDING, newY + player.height - COLLISION_PADDING);
 }
 
+// Helper: Convert grid/world coordinates to Screen ISO coordinates
+function toScreen(x, y, z = 0) {
+    let rx, ry;
+    const maxW = MAP_WIDTH * TILE_SIZE;
+    const maxH = MAP_HEIGHT * TILE_SIZE;
+
+    if (camera.rotation === 0) {
+        rx = x;
+        ry = y;
+    } else if (camera.rotation === 90) {
+        rx = y;
+        ry = maxW - x;
+    } else if (camera.rotation === 180) {
+        rx = maxW - x;
+        ry = maxH - y;
+    } else { // 270
+        rx = maxH - y;
+        ry = x;
+    }
+
+    const gridX = rx / TILE_SIZE;
+    const gridY = ry / TILE_SIZE;
+
+    const screenX = (gridX - gridY) * (ISO_TILE_WIDTH / 2);
+    const screenY = (gridX + gridY) * (ISO_TILE_HEIGHT / 2) - z;
+
+    return { x: screenX + canvas.width / 2 - camera.x, y: screenY + canvas.height / 2 - camera.y };
+}
+
 // Update player position
 function updatePlayer() {
+    if (player.isLocked) return;
+
     let newX = player.x;
     let newY = player.y;
     
-    if (keys.up) {
-        newY -= player.speed;
-        player.direction = 'up';
-    }
-    if (keys.down) {
-        newY += player.speed;
-        player.direction = 'down';
-    }
-    if (keys.left) {
-        newX -= player.speed;
-        player.direction = 'left';
-    }
-    if (keys.right) {
-        newX += player.speed;
-        player.direction = 'right';
-    }
+    let dx = 0;
+    let dy = 0;
     
-    // Check collision for X and Y separately for smoother movement
+    if (keys.up) dy = -1;
+    if (keys.down) dy = 1;
+    if (keys.left) dx = -1;
+    if (keys.right) dx = 1;
+
+    if (dx !== 0 || dy !== 0) {
+        let worldDx = dx;
+        let worldDy = dy;
+
+        if (camera.rotation === 90) {
+            worldDx = -dy;
+            worldDy = dx;
+        } else if (camera.rotation === 180) {
+            worldDx = -dx;
+            worldDy = -dy;
+        } else if (camera.rotation === 270) {
+            worldDx = dy;
+            worldDy = -dx;
+        }
+
+        newX += worldDx * player.speed;
+        newY += worldDy * player.speed;
+
+        if (worldDx > 0) player.direction = 'right';
+        if (worldDx < 0) player.direction = 'left';
+        if (worldDy > 0) player.direction = 'down';
+        if (worldDy < 0) player.direction = 'up';
+    }
+
     if (canMove(newX, player.y)) {
         player.x = newX;
     }
     if (canMove(player.x, newY)) {
         player.y = newY;
     }
+
+    // Trigger PT Interaction
+    checkInteractions();
+
+    // Update Camera Target (centered on player)
+    const gridX_P = getRotatedX(player.x, player.y) / TILE_SIZE;
+    const gridY_P = getRotatedY(player.x, player.y) / TILE_SIZE;
+    const targetCamX = (gridX_P - gridY_P) * (ISO_TILE_WIDTH / 2);
+    const targetCamY = (gridX_P + gridY_P) * (ISO_TILE_HEIGHT / 2);
+
+    camera.x = targetCamX;
+    camera.y = targetCamY;
+}
+
+let activeDialog = null;
+
+function checkInteractions() {
+    // If cutscene is playing, don't check other interactions or clear dialog
+    if (player.isLocked) return;
+
+    // Distance to PT's Lab area
+    const distToLab = Math.sqrt(Math.pow(player.x - ptCat.x, 2) + Math.pow(player.y - ptCat.y, 2));
+
+    if (distToLab < 5 * TILE_SIZE && !ptCat.triggered) {
+        ptCat.triggered = true;
+        startPTCutscene();
+        return; // Don't process other dialogs this frame
+    }
+
+    // Distance to Sarah
+    const distToSarah = Math.sqrt(Math.pow(player.x - sarah.x, 2) + Math.pow(player.y - sarah.y, 2));
+    if (distToSarah < 2 * TILE_SIZE) {
+        activeDialog = { text: "Sarah: I'm writing a blog post about this villain!", x: sarah.x, y: sarah.y - TILE_SIZE };
+    } else {
+        // Only clear if we aren't in a cutscene (checked at top)
+        activeDialog = null;
+    }
+}
+
+function startPTCutscene() {
+    player.isLocked = true;
+
+    // Show Dialog
+    activeDialog = { text: "PT: Butler! Bring me the Living Spray!", x: ptCat.x, y: ptCat.y - TILE_SIZE };
+
+    setTimeout(() => {
+        activeDialog = null;
+        player.isLocked = false;
+    }, 4000);
+}
+
+function getRotatedX(x, y) {
+    const maxW = MAP_WIDTH * TILE_SIZE;
+    const maxH = MAP_HEIGHT * TILE_SIZE;
+    if (camera.rotation === 0) return x;
+    if (camera.rotation === 90) return y;
+    if (camera.rotation === 180) return maxW - x;
+    return maxH - y;
+}
+
+function getRotatedY(x, y) {
+    const maxW = MAP_WIDTH * TILE_SIZE;
+    const maxH = MAP_HEIGHT * TILE_SIZE;
+    if (camera.rotation === 0) return y;
+    if (camera.rotation === 90) return maxW - x;
+    if (camera.rotation === 180) return maxH - y;
+    return x;
+}
+
+// Draw a single block/tile
+function drawBlock(tile, x, y, z) {
+    const worldX = x * TILE_SIZE;
+    const worldY = y * TILE_SIZE;
+
+    const pos = toScreen(worldX, worldY, 0);
+
+    const cx = pos.x;
+    const cy = pos.y;
+
+    const halfW = ISO_TILE_WIDTH / 2;
+    const halfH = ISO_TILE_HEIGHT / 2;
+
+    ctx.fillStyle = tileColors[tile];
+
+    const topY = cy - z;
+
+    // Top Face
+    ctx.beginPath();
+    ctx.moveTo(cx, topY);
+    ctx.lineTo(cx + halfW, topY + halfH);
+    ctx.lineTo(cx, topY + ISO_TILE_HEIGHT);
+    ctx.lineTo(cx - halfW, topY + halfH);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Sides
+    if (z > 0) {
+        ctx.fillStyle = darken(tileColors[tile], 20);
+        ctx.beginPath();
+        ctx.moveTo(cx + halfW, topY + halfH);
+        ctx.lineTo(cx + halfW, topY + halfH + z);
+        ctx.lineTo(cx, topY + ISO_TILE_HEIGHT + z);
+        ctx.lineTo(cx, topY + ISO_TILE_HEIGHT);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = darken(tileColors[tile], 40);
+        ctx.beginPath();
+        ctx.moveTo(cx - halfW, topY + halfH);
+        ctx.lineTo(cx - halfW, topY + halfH + z);
+        ctx.lineTo(cx, topY + ISO_TILE_HEIGHT + z);
+        ctx.lineTo(cx, topY + ISO_TILE_HEIGHT);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    // Details
+    if (tile === 4) { // Tree
+        const treeX = cx;
+        const treeY = topY + halfH;
+        ctx.fillStyle = '#1a4a1a';
+        ctx.beginPath();
+        ctx.ellipse(treeX, treeY - 10, 10, 20, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    if (tile === 3) { // Hospital Cross
+        const tx = cx;
+        const ty = topY + halfH;
+        ctx.fillStyle = '#ff0000';
+        ctx.fillRect(tx - 2, ty - 8, 4, 16);
+        ctx.fillRect(tx - 8, ty - 2, 16, 4);
+    }
+
+    if (tile === 6) { // Lab text
+        const tx = cx;
+        const ty = topY + halfH;
+        ctx.fillStyle = '#cc0000';
+        ctx.font = 'bold 10px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('LAB', tx, ty - 5);
+    }
+}
+
+function darken(color, percent) {
+    const num = parseInt(color.replace('#',''), 16);
+    const amt = Math.round(2.55 * percent);
+    let R = (num >> 16) - amt;
+    let B = ((num >> 8) & 0x00FF) - amt;
+    let G = (num & 0x0000FF) - amt;
+
+    return '#' + (0x1000000 + (R<255?R<1?0:R:255)*0x10000 + (B<255?B<1?0:B:255)*0x100 + (G<255?G<1?0:G:255)).toString(16).slice(1);
 }
 
 // Draw the city map
 function drawMap() {
-    for (let y = 0; y < MAP_HEIGHT; y++) {
-        for (let x = 0; x < MAP_WIDTH; x++) {
-            const tile = cityMap[y][x];
-            ctx.fillStyle = tileColors[tile];
-            ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
-            
-            // Add details for trees
-            if (tile === 4) {
-                ctx.fillStyle = '#1a4a1a';
-                ctx.beginPath();
-                ctx.arc(x * TILE_SIZE + TILE_SIZE/2, y * TILE_SIZE + TILE_SIZE/2, TILE_SIZE/3, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            
-            // Add hospital cross
-            if (tile === 3) {
-                ctx.fillStyle = '#ff0000';
-                const centerX = x * TILE_SIZE + TILE_SIZE/2;
-                const centerY = y * TILE_SIZE + TILE_SIZE/2;
-                ctx.fillRect(centerX - 2, centerY - 8, 4, 16);
-                ctx.fillRect(centerX - 8, centerY - 2, 16, 4);
-            }
+    const tilesToDraw = [];
+    for(let y=0; y<MAP_HEIGHT; y++) {
+        for(let x=0; x<MAP_WIDTH; x++) {
+            tilesToDraw.push({x, y, tile: cityMap[y][x]});
         }
     }
     
-    // Draw "HOSPITAL" text
+    // Add entities to sort list
+    // We treat entities as objects at their floor position
+    tilesToDraw.push({type: 'player', x: player.x/TILE_SIZE, y: player.y/TILE_SIZE});
+    tilesToDraw.push({type: 'pt', x: ptCat.x/TILE_SIZE, y: ptCat.y/TILE_SIZE});
+    tilesToDraw.push({type: 'sarah', x: sarah.x/TILE_SIZE, y: sarah.y/TILE_SIZE});
+    tilesToDraw.push({type: 'zazu', x: zazu.x/TILE_SIZE, y: zazu.y/TILE_SIZE});
+
+    tilesToDraw.sort((a, b) => {
+        const posA = toScreen(a.x * TILE_SIZE, a.y * TILE_SIZE, 0);
+        const posB = toScreen(b.x * TILE_SIZE, b.y * TILE_SIZE, 0);
+        return posA.y - posB.y;
+    });
+
+    tilesToDraw.forEach(t => {
+        if (t.type) {
+            if (t.type === 'player') drawPlayer();
+            if (t.type === 'pt') drawPTCat();
+            if (t.type === 'sarah') drawSarah();
+            if (t.type === 'zazu') drawZazu();
+        } else {
+            const h = tileHeights[t.tile] || 0;
+            drawBlock(t.tile, t.x, t.y, h);
+        }
+    });
+
+    const hospPos = toScreen(12.5 * TILE_SIZE, 11.5 * TILE_SIZE, BLOCK_HEIGHT);
     ctx.fillStyle = '#ff0000';
     ctx.font = 'bold 16px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('HOSPITAL', 12.5 * TILE_SIZE, 11.5 * TILE_SIZE);
+    ctx.fillText('HOSPITAL', hospPos.x, hospPos.y - 20);
+
+    if (activeDialog) {
+        const dPos = toScreen(activeDialog.x, activeDialog.y, BLOCK_HEIGHT);
+        ctx.fillStyle = 'white';
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 2;
+        const textWidth = ctx.measureText(activeDialog.text).width;
+        ctx.fillRect(dPos.x - textWidth/2 - 10, dPos.y - 40, textWidth + 20, 30);
+        ctx.strokeRect(dPos.x - textWidth/2 - 10, dPos.y - 40, textWidth + 20, 30);
+
+        ctx.fillStyle = 'black';
+        ctx.textAlign = 'center';
+        ctx.fillText(activeDialog.text, dPos.x, dPos.y - 20);
+    }
 }
 
 // Draw the dog man character
 function drawPlayer() {
-    const x = player.x;
-    const y = player.y;
+    const pos = toScreen(player.x, player.y, 0);
+    drawCharacter(pos, 'dogman', player.direction);
+}
+
+function drawPTCat() {
+    const pos = toScreen(ptCat.x, ptCat.y, 0);
+    drawCharacter(pos, 'pt', ptCat.direction);
+}
+
+function drawSarah() {
+    const pos = toScreen(sarah.x, sarah.y, 0);
+    drawCharacter(pos, 'sarah', sarah.direction);
+}
+
+function drawZazu() {
+    const pos = toScreen(zazu.x, zazu.y, 0);
+    drawCharacter(pos, 'zazu', zazu.direction);
+}
+
+function drawCharacter(pos, type, direction) {
+    const px = pos.x - TILE_SIZE/2;
+    const py = pos.y - TILE_SIZE/2 - TILE_SIZE/2;
+    
+    ctx.save();
+    ctx.translate(px, py);
+    
     const size = TILE_SIZE;
+    const lx = 0;
+    const ly = 0;
     
-    // Draw body (human body in simple style)
-    ctx.fillStyle = '#3498db'; // Blue shirt
-    ctx.fillRect(x + size * 0.25, y + size * 0.45, size * 0.5, size * 0.4);
-    
-    // Draw legs
-    ctx.fillStyle = '#2c3e50'; // Dark pants
-    ctx.fillRect(x + size * 0.25, y + size * 0.75, size * 0.2, size * 0.25);
-    ctx.fillRect(x + size * 0.55, y + size * 0.75, size * 0.2, size * 0.25);
-    
-    // Draw arms
-    ctx.fillStyle = '#e8b89d'; // Skin color
-    ctx.fillRect(x + size * 0.1, y + size * 0.45, size * 0.15, size * 0.3);
-    ctx.fillRect(x + size * 0.75, y + size * 0.45, size * 0.15, size * 0.3);
-    
-    // Draw dog head
-    ctx.fillStyle = '#b87333'; // Brown dog color
-    ctx.beginPath();
-    ctx.ellipse(x + size/2, y + size * 0.28, size * 0.32, size * 0.28, 0, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Draw snout (based on direction)
-    ctx.fillStyle = '#a06830';
-    if (player.direction === 'down') {
+    if (type === 'dogman') {
+        // Draw body
+        ctx.fillStyle = '#3498db';
+        ctx.fillRect(lx + size * 0.25, ly + size * 0.45, size * 0.5, size * 0.4);
+
+        // Legs
+        ctx.fillStyle = '#2c3e50';
+        ctx.fillRect(lx + size * 0.25, ly + size * 0.75, size * 0.2, size * 0.25);
+        ctx.fillRect(lx + size * 0.55, ly + size * 0.75, size * 0.2, size * 0.25);
+
+        // Arms
+        ctx.fillStyle = '#e8b89d';
+        ctx.fillRect(lx + size * 0.1, ly + size * 0.45, size * 0.15, size * 0.3);
+        ctx.fillRect(lx + size * 0.75, ly + size * 0.45, size * 0.15, size * 0.3);
+
+        // Head
+        ctx.fillStyle = '#b87333';
         ctx.beginPath();
-        ctx.ellipse(x + size/2, y + size * 0.42, size * 0.15, size * 0.12, 0, 0, Math.PI * 2);
+        ctx.ellipse(lx + size/2, ly + size * 0.28, size * 0.32, size * 0.28, 0, 0, Math.PI * 2);
         ctx.fill();
-    } else if (player.direction === 'up') {
-        // No snout visible from back
-    } else if (player.direction === 'left') {
+
+        // Ears
+        ctx.fillStyle = '#8b5a2b';
         ctx.beginPath();
-        ctx.ellipse(x + size * 0.25, y + size * 0.32, size * 0.15, size * 0.1, 0, 0, Math.PI * 2);
+        ctx.ellipse(lx + size * 0.22, ly + size * 0.12, size * 0.1, size * 0.15, -0.3, 0, Math.PI * 2);
         ctx.fill();
-    } else if (player.direction === 'right') {
         ctx.beginPath();
-        ctx.ellipse(x + size * 0.75, y + size * 0.32, size * 0.15, size * 0.1, 0, 0, Math.PI * 2);
+        ctx.ellipse(lx + size * 0.78, ly + size * 0.12, size * 0.1, size * 0.15, 0.3, 0, Math.PI * 2);
         ctx.fill();
+
+    } else if (type === 'pt') {
+        // Orange cat, black stripes
+        // Body
+        ctx.fillStyle = '#ff9900'; // Orange
+        ctx.fillRect(lx + size * 0.25, ly + size * 0.45, size * 0.5, size * 0.4);
+
+        // Stripes on body
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(lx + size * 0.3, ly + size * 0.5, size * 0.4, size * 0.05);
+        ctx.fillRect(lx + size * 0.3, ly + size * 0.6, size * 0.4, size * 0.05);
+        ctx.fillRect(lx + size * 0.3, ly + size * 0.7, size * 0.4, size * 0.05);
+
+        // Legs (hands/feet not striped)
+        ctx.fillStyle = '#ff9900';
+        ctx.fillRect(lx + size * 0.25, ly + size * 0.75, size * 0.2, size * 0.25);
+        ctx.fillRect(lx + size * 0.55, ly + size * 0.75, size * 0.2, size * 0.25);
+
+        // Arms (striped)
+        ctx.fillStyle = '#ff9900';
+        ctx.fillRect(lx + size * 0.1, ly + size * 0.45, size * 0.15, size * 0.3);
+        ctx.fillRect(lx + size * 0.75, ly + size * 0.45, size * 0.15, size * 0.3);
+
+        // Arm stripes
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(lx + size * 0.1, ly + size * 0.5, size * 0.15, size * 0.05);
+        ctx.fillRect(lx + size * 0.75, ly + size * 0.5, size * 0.15, size * 0.05);
+
+        // Head
+        ctx.fillStyle = '#ff9900';
+        ctx.beginPath();
+        ctx.ellipse(lx + size/2, ly + size * 0.28, size * 0.32, size * 0.28, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Ears
+        ctx.beginPath();
+        ctx.moveTo(lx + size * 0.2, ly + size * 0.15);
+        ctx.lineTo(lx + size * 0.3, ly + size * 0.05);
+        ctx.lineTo(lx + size * 0.4, ly + size * 0.15);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(lx + size * 0.6, ly + size * 0.15);
+        ctx.lineTo(lx + size * 0.7, ly + size * 0.05);
+        ctx.lineTo(lx + size * 0.8, ly + size * 0.15);
+        ctx.fill();
+
+    } else if (type === 'sarah') {
+        // Red shirt, brown hair
+         // Body
+        ctx.fillStyle = '#cc0000'; // Red shirt
+        ctx.fillRect(lx + size * 0.25, ly + size * 0.45, size * 0.5, size * 0.4);
+
+        // Legs
+        ctx.fillStyle = '#333333';
+        ctx.fillRect(lx + size * 0.25, ly + size * 0.75, size * 0.2, size * 0.25);
+        ctx.fillRect(lx + size * 0.55, ly + size * 0.75, size * 0.2, size * 0.25);
+
+        // Arms
+        ctx.fillStyle = '#e8b89d';
+        ctx.fillRect(lx + size * 0.1, ly + size * 0.45, size * 0.15, size * 0.3);
+        ctx.fillRect(lx + size * 0.75, ly + size * 0.45, size * 0.15, size * 0.3);
+
+        // Head
+        ctx.fillStyle = '#e8b89d';
+        ctx.beginPath();
+        ctx.ellipse(lx + size/2, ly + size * 0.28, size * 0.25, size * 0.25, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Hair (Brown)
+        ctx.fillStyle = '#5c4033';
+        ctx.beginPath();
+        ctx.arc(lx + size/2, ly + size * 0.25, size * 0.28, Math.PI, 0);
+        ctx.fill();
+
+    } else if (type === 'zazu') {
+        // Grey poodle
+        ctx.fillStyle = '#888888';
+
+        // Poodle puffs!
+        // Body
+        ctx.beginPath();
+        ctx.ellipse(lx + size/2, ly + size * 0.6, size * 0.2, size * 0.15, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Head
+        ctx.beginPath();
+        ctx.arc(lx + size/2, ly + size * 0.4, size * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Ears
+        ctx.beginPath();
+        ctx.ellipse(lx + size * 0.35, ly + size * 0.45, size * 0.08, size * 0.12, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(lx + size * 0.65, ly + size * 0.45, size * 0.08, size * 0.12, -0.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Legs
+        ctx.fillRect(lx + size * 0.35, ly + size * 0.7, size * 0.05, size * 0.2);
+        ctx.fillRect(lx + size * 0.6, ly + size * 0.7, size * 0.05, size * 0.2);
     }
-    
-    // Draw ears
-    ctx.fillStyle = '#8b5a2b';
-    if (player.direction === 'down' || player.direction === 'up') {
-        // Left ear
+
+    // Common Face details
+    if (type !== 'zazu') { // Zazu is too fluffy for details
+        // Eyes
+        ctx.fillStyle = '#000000';
         ctx.beginPath();
-        ctx.ellipse(x + size * 0.22, y + size * 0.12, size * 0.1, size * 0.15, -0.3, 0, Math.PI * 2);
+        ctx.arc(lx + size * 0.38, ly + size * 0.25, size * 0.05, 0, Math.PI * 2);
+        ctx.arc(lx + size * 0.62, ly + size * 0.25, size * 0.05, 0, Math.PI * 2);
         ctx.fill();
-        // Right ear
-        ctx.beginPath();
-        ctx.ellipse(x + size * 0.78, y + size * 0.12, size * 0.1, size * 0.15, 0.3, 0, Math.PI * 2);
-        ctx.fill();
-    } else if (player.direction === 'left') {
-        ctx.beginPath();
-        ctx.ellipse(x + size * 0.35, y + size * 0.08, size * 0.12, size * 0.15, 0, 0, Math.PI * 2);
-        ctx.fill();
-    } else if (player.direction === 'right') {
-        ctx.beginPath();
-        ctx.ellipse(x + size * 0.65, y + size * 0.08, size * 0.12, size * 0.15, 0, 0, Math.PI * 2);
-        ctx.fill();
+
+        // Nose/Snout
+        if (type === 'pt' || type === 'dogman') {
+            ctx.fillStyle = '#000000';
+             ctx.beginPath();
+            ctx.arc(lx + size/2, ly + size * 0.38, size * 0.04, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
-    
-    // Draw eyes
-    ctx.fillStyle = '#000000';
-    if (player.direction === 'down') {
-        ctx.beginPath();
-        ctx.arc(x + size * 0.38, y + size * 0.25, size * 0.05, 0, Math.PI * 2);
-        ctx.arc(x + size * 0.62, y + size * 0.25, size * 0.05, 0, Math.PI * 2);
-        ctx.fill();
-    } else if (player.direction === 'left') {
-        ctx.beginPath();
-        ctx.arc(x + size * 0.35, y + size * 0.25, size * 0.05, 0, Math.PI * 2);
-        ctx.fill();
-    } else if (player.direction === 'right') {
-        ctx.beginPath();
-        ctx.arc(x + size * 0.65, y + size * 0.25, size * 0.05, 0, Math.PI * 2);
-        ctx.fill();
-    }
-    
-    // Draw nose
-    ctx.fillStyle = '#1a1a1a';
-    if (player.direction === 'down') {
-        ctx.beginPath();
-        ctx.arc(x + size/2, y + size * 0.38, size * 0.04, 0, Math.PI * 2);
-        ctx.fill();
-    } else if (player.direction === 'left') {
-        ctx.beginPath();
-        ctx.arc(x + size * 0.18, y + size * 0.32, size * 0.04, 0, Math.PI * 2);
-        ctx.fill();
-    } else if (player.direction === 'right') {
-        ctx.beginPath();
-        ctx.arc(x + size * 0.82, y + size * 0.32, size * 0.04, 0, Math.PI * 2);
-        ctx.fill();
-    }
+
+    ctx.restore();
 }
 
 // Draw UI elements
@@ -313,15 +693,16 @@ function drawUI() {
 
 // Main game loop
 function gameLoop() {
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Clear canvas (Dark blue background for atmosphere)
+    ctx.fillStyle = '#2c2c3e';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     
     // Update
     updatePlayer();
     
     // Draw
     drawMap();
-    drawPlayer();
+    // drawPlayer(); // Removed because it's now drawn inside drawMap for depth sorting
     drawUI();
     
     // Continue loop
