@@ -3,6 +3,7 @@
 // Starting location: City map, in front of a hospital
 
 import './styles.css';
+import posterSrc from './assets/dogman_poster.png';
 
 // Game constants
 const TILE_SIZE = 32; // Logic size
@@ -14,8 +15,21 @@ const MAP_WIDTH = 25;
 const MAP_HEIGHT = 18;
 const COLLISION_PADDING = 4;
 
+// Game States
+const GAME_STATE = {
+    INTRO: 0,
+    MENU: 1,
+    PLAYING: 2
+};
+
+let currentState = GAME_STATE.INTRO;
 let canvas;
 let ctx;
+
+// Intro State
+let introStartTime = 0;
+const introImage = new Image();
+introImage.src = posterSrc;
 
 // Camera state
 const camera = {
@@ -68,7 +82,8 @@ const keys = {
     left: false,
     right: false,
     q: false,
-    e: false
+    e: false,
+    enter: false
 };
 
 // City map layout
@@ -136,12 +151,19 @@ document.addEventListener('keydown', (e) => {
             keys.right = true;
             break;
         case 'q':
-            if (!keys.q) rotateCamera('left');
+            if (!keys.q && currentState === GAME_STATE.PLAYING) rotateCamera('left');
             keys.q = true;
             break;
         case 'e':
-            if (!keys.e) rotateCamera('right');
+            if (!keys.e && currentState === GAME_STATE.PLAYING) rotateCamera('right');
             keys.e = true;
+            break;
+        case 'enter':
+        case ' ':
+            keys.enter = true;
+            if (currentState === GAME_STATE.MENU) {
+                currentState = GAME_STATE.PLAYING;
+            }
             break;
     }
 });
@@ -169,6 +191,10 @@ document.addEventListener('keyup', (e) => {
             break;
         case 'e':
             keys.e = false;
+            break;
+        case 'enter':
+        case ' ':
+            keys.enter = false;
             break;
     }
 });
@@ -691,19 +717,103 @@ function drawUI() {
     ctx.fillText('Use WASD or Arrow keys to move', 20, canvas.height - 18);
 }
 
+// Draw Intro Sequence
+function drawIntro() {
+    const elapsed = Date.now() - introStartTime;
+    
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const w = canvas.width;
+    const h = canvas.height;
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'white';
+
+    // Sequence timing
+    if (elapsed < 3000) {
+        // Splash 1: Treehouse Comix
+        ctx.font = 'bold 40px "Comic Sans MS", cursive, sans-serif';
+        ctx.fillText('TREEHOUSE COMIX', w/2, h/2 - 20);
+        ctx.font = 'bold 20px "Comic Sans MS", cursive, sans-serif';
+        ctx.fillText('PRESENTS', w/2, h/2 + 30);
+    } else if (elapsed < 6000) {
+        // Splash 2: Dav Pilkey
+        ctx.font = 'bold 30px Arial, sans-serif';
+        ctx.fillText('A DAV PILKEY PRODUCTION', w/2, h/2);
+    } else if (elapsed < 10000) {
+        // Splash 3: Poster
+        if (introImage.complete) {
+            // Draw image scaled to fit
+            const scale = Math.min(w / introImage.width, h / introImage.height) * 0.8;
+            const imgW = introImage.width * scale;
+            const imgH = introImage.height * scale;
+            ctx.drawImage(introImage, (w - imgW)/2, (h - imgH)/2, imgW, imgH);
+        } else {
+            ctx.fillText('Loading...', w/2, h/2);
+        }
+    } else {
+        // Transition
+        currentState = GAME_STATE.MENU;
+    }
+}
+
+// Draw Main Menu
+function drawMenu() {
+    ctx.fillStyle = '#2c3e50'; // Dark blue bg
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Title
+    ctx.fillStyle = '#f1c40f';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 60px "Comic Sans MS", cursive, sans-serif';
+    ctx.strokeStyle = 'black';
+    ctx.lineWidth = 5;
+    ctx.strokeText('DOG MAN RPG', w/2, h/3);
+    ctx.fillText('DOG MAN RPG', w/2, h/3);
+
+    // Subtitle
+    ctx.fillStyle = 'white';
+    ctx.font = '20px Arial';
+    ctx.fillText('The Legend of the Good Boy', w/2, h/3 + 40);
+
+    // Press Start (Flashing)
+    if (Math.floor(Date.now() / 500) % 2 === 0) {
+        ctx.font = 'bold 24px Arial';
+        ctx.fillStyle = 'white';
+        ctx.fillText('PRESS START', w/2, h * 0.7);
+    }
+    
+    // Instruction
+    ctx.font = '16px Arial';
+    ctx.fillStyle = '#aaaaaa';
+    ctx.fillText('(Press Space or Enter)', w/2, h * 0.7 + 30);
+}
+
+
 // Main game loop
 function gameLoop() {
-    // Clear canvas (Dark blue background for atmosphere)
-    ctx.fillStyle = '#2c2c3e';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Update
-    updatePlayer();
-    
-    // Draw
-    drawMap();
-    // drawPlayer(); // Removed because it's now drawn inside drawMap for depth sorting
-    drawUI();
+    // Main dispatch based on state
+    switch(currentState) {
+        case GAME_STATE.INTRO:
+            drawIntro();
+            break;
+        case GAME_STATE.MENU:
+            drawMenu();
+            break;
+        case GAME_STATE.PLAYING:
+            // Clear canvas (Dark blue background for atmosphere)
+            ctx.fillStyle = '#2c2c3e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            updatePlayer();
+            drawMap();
+            drawUI();
+            break;
+    }
     
     // Continue loop
     requestAnimationFrame(gameLoop);
@@ -721,6 +831,10 @@ function init() {
         console.error('Could not get canvas context');
         return;
     }
+
+    // Start intro timer
+    introStartTime = Date.now();
+
     gameLoop();
 }
 
